@@ -2,37 +2,86 @@
 <html lang="en">
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Password Generator (with Clean-Word Filter)</title>
+<title>Password Generator (Pattern + Filter)</title>
 <style>
-  body { font: 16px system-ui, sans-serif; margin: 2rem; max-width: 760px }
-  .row { margin: .75rem 0 }
-  input[type="number"] { width: 5rem }
-  .out { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: .75rem; border: 1px solid #ddd; border-radius: .5rem; word-break: break-all }
-  button { padding: .6rem 1rem; border-radius: .5rem; border: 1px solid #ccc; background: #f6f6f6; cursor: pointer }
-  .muted { color:#666 }
+body {
+  font: 16px system-ui, sans-serif;
+  margin: 2rem;
+  max-width: 760px;
+  background: #000;        /* Black background */
+  color: #fff;             /* White text */
+}
+
+.row { margin: .75rem 0 }
+
+input[type="number"] {
+  width: 5rem;
+  background: #111;        /* dark input background */
+  color: #fff;
+  border: 1px solid #555;
+}
+
+.out {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: .75rem;
+  border: 1px solid #555;
+  border-radius: .5rem;
+  word-break: break-all;
+  background: #111;
+  color: #fff;
+}
+
+button {
+  padding: .6rem 1rem;
+  border-radius: .5rem;
+  border: 1px solid #ff69b4; /* hot pink border */
+  background: #111;
+  color: #ff69b4;           /* hot pink text */
+  cursor: pointer;
+}
+button:hover {
+  background: #ff69b4;
+  color: #000;
+}
+
+/* HOT PINK CHECKBOXES */
+input[type="checkbox"] {
+  accent-color: #ff69b4;
+}
+
+fieldset {
+  border:1px solid #555;
+  border-radius:.5rem;
+  padding: .75rem;
+}
+legend { padding: 0 .4rem; color:#ff69b4; }
+
+.muted { color:#aaa }
+
 </style>
 
 <h1>Password Generator</h1>
 
-<div class="row">
-  <label>Length:
-    <input id="len" type="number" min="8" max="64" value="20">
-  </label>
+<fieldset class="row">
+  <legend>Mode</legend>
+  <label><input type="radio" name="mode" id="modeRandom" checked> Random characters</label>
+  <label style="margin-left:1rem"><input type="radio" name="mode" id="modePattern"> Pattern: Adj/Adv + Noun + 2 digits + 1 symbol</label>
+</fieldset>
+
+<div class="row" id="randomOpts">
+  <label>Length: <input id="len" type="number" min="8" max="64" value="20"></label>
+  <div class="row">
+    <label><input id="lower" type="checkbox" checked> a–z</label>
+    <label><input id="upper" type="checkbox" checked style="margin-left:1rem"> A–Z</label>
+    <label><input id="digits" type="checkbox" checked style="margin-left:1rem"> 0–9</label>
+    <label><input id="symbols" type="checkbox" checked style="margin-left:1rem"> Symbols</label>
+  </div>
 </div>
 
-<div class="row">
-  <label><input id="lower" type="checkbox" checked> a–z</label>
-  <label><input id="upper" type="checkbox" checked style="margin-left:1rem"> A–Z</label>
-  <label><input id="digits" type="checkbox" checked style="margin-left:1rem"> 0–9</label>
-  <label><input id="symbols" type="checkbox" checked style="margin-left:1rem"> Symbols</label>
-</div>
-
-<div class="row">
+<div class="row" id="sharedOpts">
   <label><input id="noAmbig" type="checkbox"> Exclude lookalikes (O0 l1 I| { } [ ] ( ) / \ , ; : . ` ' ")</label>
-</div>
-
-<div class="row">
-  <label><input id="avoidWords" type="checkbox" checked> Avoid inappropriate/common words</label>
+  <label style="margin-left:1rem"><input id="avoidWords" type="checkbox" checked> Avoid inappropriate/common words</label>
+  <label style="margin-left:1rem"><input id="camelCase" type="checkbox" checked> Capitalize Words (RunningMan)</label>
 </div>
 
 <div class="row">
@@ -45,6 +94,7 @@
 
 <script>
 (async function () {
+  // Character sets
   const ambig = /[O0l1I|{}\[\]\(\)\/\\,;:\.`'"]/g;
   const sets = {
     lower: "abcdefghijklmnopqrstuvwxyz",
@@ -53,8 +103,7 @@
     symbols: "!@#$%^&*_-+=~:?<>{}[]()|/\\.,;"
   };
 
-  // Load word lists (lowercase, one per line)
-  let BAD = new Set(), COMMON = new Set();
+  // Load lists (lowercase, one per line)
   const loadList = async (path) => {
     try {
       const res = await fetch(path, { cache: "no-store" });
@@ -66,9 +115,13 @@
       return new Set();
     }
   };
-  BAD    = await loadList("./data/badwords.txt");
-  COMMON = await loadList("./data/common_words.txt");
 
+  let BAD = await loadList("./data/badwords.txt");
+  let COMMON = await loadList("./data/common_words.txt");
+  let ADJ = await loadList("./data/adjectives.txt");
+  let NOUN = await loadList("./data/nouns.txt");
+
+  // Secure RNG helpers
   function randomInt(max) {
     if (max <= 0) return 0;
     const u32 = new Uint32Array(1);
@@ -77,6 +130,9 @@
     do { crypto.getRandomValues(u32); r = u32[0]; } while (r >= limit);
     return r % max;
   }
+  function pickFromArray(arr) { return arr[randomInt(arr.length)]; }
+
+  // Build charset for random mode
   function getCharset(opts) {
     let cs = "";
     if (opts.lower)  cs += sets.lower;
@@ -86,7 +142,9 @@
     if (opts.noAmbig) cs = cs.replace(ambig, "");
     return cs;
   }
-  function generate(len, cs, mustSets) {
+
+  // Random mode generator (ensures at least one from each selected set)
+  function generateRandom(len, cs, mustSets) {
     if (cs.length < 4) throw new Error("Choose at least one character set.");
     const picks = [];
     for (const s of mustSets) picks.push(s.charAt(randomInt(s.length)));
@@ -98,6 +156,7 @@
     return picks.join("");
   }
 
+  // De-leet + normalization for inappropriate checks
   const deLeetMap = {'0':'o','1':'i','!':'i','3':'e','4':'a','@':'a','5':'s','$':'s','7':'t','8':'b','9':'g'};
   function normalizeForCheck(pw) {
     const lower = pw.toLowerCase();
@@ -121,43 +180,95 @@
     }
     return false;
   }
-  async function makePassword(opts) {
-    const mustSets = [], allSets = [];
-    if (opts.lower)  { mustSets.push(sets.lower);  allSets.push(sets.lower); }
-    if (opts.upper)  { mustSets.push(sets.upper);  allSets.push(sets.upper); }
-    if (opts.digits) { mustSets.push(sets.digits); allSets.push(sets.digits); }
-    if (opts.symbols){ mustSets.push(sets.symbols);allSets.push(sets.symbols); }
-    let cs = allSets.join("");
-    if (opts.noAmbig) cs = cs.replace(ambig, "");
-    const MAX_TRIES = 200;
+
+  // Pattern mode: Adj/Adv + Noun + 2 digits + 1 symbol
+  function toTitle(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
+
+  function pickCleanWord(fromSet) {
+    const arr = Array.from(fromSet);
+    const MAX_TRIES = 500;
     for (let i = 0; i < MAX_TRIES; i++) {
-      const pw = generate(opts.len, cs, mustSets);
-      if (!opts.avoidWords || !isInappropriate(pw, true)) return pw;
+      const w = arr[randomInt(arr.length)];
+      if (!BAD.has(w)) return w;
     }
-    throw new Error("Could not generate a clean password after multiple attempts. Try different settings.");
+    throw new Error("Could not pick a clean word; check your word lists.");
   }
 
+  function generatePattern(opts) {
+    if (!ADJ.size || !NOUN.size) throw new Error("Word lists missing: add data/adjectives.txt and data/nouns.txt");
+    const adj = pickCleanWord(ADJ);
+    const noun = pickCleanWord(NOUN);
+    const wordPart = (opts.camelCase ? (toTitle(adj) + toTitle(noun)) : (adj + noun));
+    const num = String(randomInt(100)).padStart(2, "0");
+    let symbols = sets.symbols;
+    if (opts.noAmbig) symbols = symbols.replace(ambig, "");
+    const sym = symbols.charAt(randomInt(symbols.length));
+    return wordPart + num + sym;
+  }
+
+  // Try-making with filter, shared for both modes
+  async function makePassword(opts) {
+    const MAX_TRIES = 200;
+
+    if (opts.mode === "pattern") {
+      for (let i = 0; i < MAX_TRIES; i++) {
+        const cand = generatePattern(opts);
+        if (!opts.avoidWords || !isInappropriate(cand, true)) return cand;
+      }
+      throw new Error("Could not generate a clean pattern password. Consider expanding word lists or disabling 'avoid words'.");
+    } else {
+      const mustSets = [], allSets = [];
+      if (opts.lower)  { mustSets.push(sets.lower);  allSets.push(sets.lower); }
+      if (opts.upper)  { mustSets.push(sets.upper);  allSets.push(sets.upper); }
+      if (opts.digits) { mustSets.push(sets.digits); allSets.push(sets.digits); }
+      if (opts.symbols){ mustSets.push(sets.symbols);allSets.push(sets.symbols); }
+      let cs = allSets.join("");
+      if (opts.noAmbig) cs = cs.replace(ambig, "");
+      for (let i = 0; i < MAX_TRIES; i++) {
+        const cand = generateRandom(opts.len, cs, mustSets);
+        if (!opts.avoidWords || !isInappropriate(cand, true)) return cand;
+      }
+      throw new Error("Could not generate a clean password. Try different settings.");
+    }
+  }
+
+  // UI wiring
   const $ = id => document.getElementById(id);
+  const randomOpts = document.getElementById("randomOpts");
+  const modeRandom = $("modeRandom");
+  const modePattern = $("modePattern");
+
+  function updateModeUI() {
+    randomOpts.style.display = modeRandom.checked ? "" : "none";
+  }
+  modeRandom.addEventListener("change", updateModeUI);
+  modePattern.addEventListener("change", updateModeUI);
+  updateModeUI();
+
   $("gen").onclick = async () => {
     const opts = {
-      len: Math.max(8, Math.min(64, parseInt($("len").value || "20", 10))),
-      lower: $("lower").checked,
-      upper: $("upper").checked,
-      digits: $("digits").checked,
-      symbols: $("symbols").checked,
+      mode: modePattern.checked ? "pattern" : "random",
+      len: Math.max(8, Math.min(64, parseInt(($("len")?.value) || "20", 10))),
+      lower: $("lower")?.checked,
+      upper: $("upper")?.checked,
+      digits: $("digits")?.checked,
+      symbols: $("symbols")?.checked,
       noAmbig: $("noAmbig").checked,
-      avoidWords: $("avoidWords").checked
+      avoidWords: $("avoidWords").checked,
+      camelCase: $("camelCase").checked
     };
     try {
       const pw = await makePassword(opts);
       $("pw").textContent = pw;
-      const note = (BAD.size || COMMON.size) ? "Clean-word filter active." : "Word lists not loaded; filter inactive.";
-      $("msg").textContent = `Generated ${opts.len}-char password locally. ${note}`;
+      const listsLoaded = (BAD.size || COMMON.size);
+      $("msg").textContent =
+        `Generated locally. ${listsLoaded ? "Clean-word filter active." : "Word filter inactive (lists not loaded)."}`;
     } catch (e) {
       $("pw").textContent = "";
       $("msg").textContent = e.message;
     }
   };
+
   $("copy").onclick = async () => {
     const text = $("pw").textContent;
     if (!text) return;
