@@ -1,0 +1,39 @@
+name: Update badwords list
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'   # Mondays 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch source lists
+        run: |
+          mkdir -p data/tmp
+          curl -fsSL https://raw.githubusercontent.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words/master/en > data/tmp/ldnoobw.txt
+          curl -fsSL https://raw.githubusercontent.com/coffee-and-fun/google-profanity-words/main/data/en.txt > data/tmp/google.txt
+          # Merge, normalize, strip comments/empties, sort+dedupe
+          cat data/tmp/*.txt \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's/\r$//' \
+            | sed 's/#.*$//' \
+            | sed '/^\s*$/d' \
+            | sort -u > data/badwords.txt
+
+          # Optional allowlist: words you explicitly want to *permit*
+          if [ -f data/allowlist.txt ]; then
+            grep -vxF -f data/allowlist.txt data/badwords.txt > data/badwords.filtered.txt || true
+            mv data/badwords.filtered.txt data/badwords.txt
+          fi
+
+          rm -rf data/tmp
+
+      - name: Commit if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update badwords list (auto)"
+          file_pattern: data/badwords.txt
