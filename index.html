@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Password Generator (with Clean-Word Filter)</title>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 2rem; max-width: 760px }
+  .row { margin: .75rem 0 }
+  input[type="number"] { width: 5rem }
+  .out { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: .75rem; border: 1px solid #ddd; border-radius: .5rem; word-break: break-all }
+  button { padding: .6rem 1rem; border-radius: .5rem; border: 1px solid #ccc; background: #f6f6f6; cursor: pointer }
+  .muted { color:#666 }
+</style>
+
+<h1>Password Generator</h1>
+
+<div class="row">
+  <label>Length:
+    <input id="len" type="number" min="8" max="64" value="20">
+  </label>
+</div>
+
+<div class="row">
+  <label><input id="lower" type="checkbox" checked> a–z</label>
+  <label><input id="upper" type="checkbox" checked style="margin-left:1rem"> A–Z</label>
+  <label><input id="digits" type="checkbox" checked style="margin-left:1rem"> 0–9</label>
+  <label><input id="symbols" type="checkbox" checked style="margin-left:1rem"> Symbols</label>
+</div>
+
+<div class="row">
+  <label><input id="noAmbig" type="checkbox"> Exclude lookalikes (O0 l1 I| { } [ ] ( ) / \ , ; : . ` ' ")</label>
+</div>
+
+<div class="row">
+  <label><input id="avoidWords" type="checkbox" checked> Avoid inappropriate/common words</label>
+</div>
+
+<div class="row">
+  <button id="gen">Generate</button>
+  <button id="copy" style="margin-left:.5rem">Copy</button>
+</div>
+
+<div class="row out" id="pw" aria-live="polite"></div>
+<div class="row muted" id="msg"></div>
+
+<script>
+(async function () {
+  const ambig = /[O0l1I|{}\[\]\(\)\/\\,;:\.`'"]/g;
+  const sets = {
+    lower: "abcdefghijklmnopqrstuvwxyz",
+    upper: "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    digits: "0123456789",
+    symbols: "!@#$%^&*_-+=~:?<>{}[]()|/\\.,;"
+  };
+
+  // Load word lists (lowercase, one per line)
+  let BAD = new Set(), COMMON = new Set();
+  const loadList = async (path) => {
+    try {
+      const res = await fetch(path, { cache: "no-store" });
+      if (!res.ok) throw new Error(path + " not found");
+      const text = await res.text();
+      return new Set(text.split(/\r?\n/).map(s => s.trim().toLowerCase()).filter(Boolean));
+    } catch (e) {
+      console.warn("List load skipped:", e.message);
+      return new Set();
+    }
+  };
+  BAD    = await loadList("./data/badwords.txt");
+  COMMON = await loadList("./data/common_words.txt");
+
+  function randomInt(max) {
+    if (max <= 0) return 0;
+    const u32 = new Uint32Array(1);
+    const limit = Math.floor(0x100000000 / max) * max;
+    let r;
+    do { crypto.getRandomValues(u32); r = u32[0]; } while (r >= limit);
+    return r % max;
+  }
+  function getCharset(opts) {
+    let cs = "";
+    if (opts.lower)  cs += sets.lower;
+    if (opts.upper)  cs += sets.upper;
+    if (opts.digits) cs += sets.digits;
+    if (opts.symbols) cs += sets.symbols;
+    if (opts.noAmbig) cs = cs.replace(ambig, "");
+    return cs;
+  }
+  function generate(len, cs, mustSets) {
+    if (cs.length < 4) throw new Error("Choose at least one character set.");
+    const picks = [];
+    for (const s of mustSets) picks.push(s.charAt(randomInt(s.length)));
+    for (let i = picks.length; i < len; i++) picks.push(cs.charAt(randomInt(cs.length)));
+    for (let i = picks.length - 1; i > 0; i--) {
+      const j = randomInt(i + 1);
+      [picks[i], picks[j]] = [picks[j], picks[i]];
+    }
+    return picks.join("");
+  }
+
+  const deLeetMap = {'0':'o','1':'i','!':'i','3':'e','4':'a','@':'a','5':'s','$':'s','7':'t','8':'b','9':'g'};
+  function normalizeForCheck(pw) {
+    const lower = pw.toLowerCase();
+    let deLeet = "";
+    for (const ch of lower) deLeet += (deLeetMap[ch] || ch);
+    const lettersOnly = deLeet.replace(/[^a-z]/g, "");
+    return { deLeet, lettersOnly };
+  }
+  function isInappropriate(pw, useCommon) {
+    const { deLeet, lettersOnly } = normalizeForCheck(pw);
+    for (const w of BAD) { if (deLeet.includes(w) || lettersOnly.includes(w)) return true; }
+    if (useCommon && COMMON.size) {
+      for (const w of COMMON) {
+        if (w.length < 4) continue;
+        if (deLeet.includes(w) || lettersOnly.includes(w)) return true;
+      }
+    }
+    for (const w of BAD) {
+      if (new RegExp(`${w}\\d+`).test(deLeet)) return true;
+      if (new RegExp(`\\d+${w}`).test(deLeet)) return true;
+    }
+    return false;
+  }
+  async function makePassword(opts) {
+    const mustSets = [], allSets = [];
+    if (opts.lower)  { mustSets.push(sets.lower);  allSets.push(sets.lower); }
+    if (opts.upper)  { mustSets.push(sets.upper);  allSets.push(sets.upper); }
+    if (opts.digits) { mustSets.push(sets.digits); allSets.push(sets.digits); }
+    if (opts.symbols){ mustSets.push(sets.symbols);allSets.push(sets.symbols); }
+    let cs = allSets.join("");
+    if (opts.noAmbig) cs = cs.replace(ambig, "");
+    const MAX_TRIES = 200;
+    for (let i = 0; i < MAX_TRIES; i++) {
+      const pw = generate(opts.len, cs, mustSets);
+      if (!opts.avoidWords || !isInappropriate(pw, true)) return pw;
+    }
+    throw new Error("Could not generate a clean password after multiple attempts. Try different settings.");
+  }
+
+  const $ = id => document.getElementById(id);
+  $("gen").onclick = async () => {
+    const opts = {
+      len: Math.max(8, Math.min(64, parseInt($("len").value || "20", 10))),
+      lower: $("lower").checked,
+      upper: $("upper").checked,
+      digits: $("digits").checked,
+      symbols: $("symbols").checked,
+      noAmbig: $("noAmbig").checked,
+      avoidWords: $("avoidWords").checked
+    };
+    try {
+      const pw = await makePassword(opts);
+      $("pw").textContent = pw;
+      const note = (BAD.size || COMMON.size) ? "Clean-word filter active." : "Word lists not loaded; filter inactive.";
+      $("msg").textContent = `Generated ${opts.len}-char password locally. ${note}`;
+    } catch (e) {
+      $("pw").textContent = "";
+      $("msg").textContent = e.message;
+    }
+  };
+  $("copy").onclick = async () => {
+    const text = $("pw").textContent;
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text); $("msg").textContent = "Copied to clipboard."; }
+    catch { $("msg").textContent = "Copy failed. Copy manually."; }
+  };
+})();
+</script>
+</html>
