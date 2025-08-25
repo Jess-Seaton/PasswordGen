@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Password Generator (Pattern + Filter)</title>
+<title>Password Generator (Exact-Fit Pattern + Filter)</title>
 <style>
   body {
     font: 16px system-ui, sans-serif;
@@ -13,7 +13,7 @@
   }
   .row { margin: .75rem 0 }
   input[type="number"] {
-    width: 5rem;
+    width: 6rem;
     background: #111;
     color: #fff;
     border: 1px solid #555;
@@ -27,7 +27,6 @@
     border-radius: .5rem;
     word-break: break-all;
     background: #111;
-    color: #fff;
   }
   button {
     padding: .6rem 1rem;
@@ -51,14 +50,19 @@
 
 <h1>Password Generator</h1>
 
+<div class="row">
+  <label>Length:
+    <input id="len" type="number" min="6" max="64" value="16">
+  </label>
+</div>
+
 <fieldset class="row">
   <legend>Mode</legend>
   <label><input type="radio" name="mode" id="modeRandom" checked> Random characters</label>
-  <label><input type="radio" name="mode" id="modePattern"> Pattern: Adj/Adv + Noun + 2 digits + 1 symbol</label>
+  <label><input type="radio" name="mode" id="modePattern"> Pattern: Adj/Adv + Noun + 2 digits + 1 symbol (exact fit)</label>
 </fieldset>
 
 <div class="row" id="randomOpts">
-  <label>Length: <input id="len" type="number" min="8" max="64" value="20"></label>
   <div class="row">
     <label><input id="lower" type="checkbox" checked> a–z</label>
     <label><input id="upper" type="checkbox" checked> A–Z</label>
@@ -92,16 +96,51 @@
     symbols: "!@#$%^&*_-+=~:?<>{}[]()|/\\.,;"
   };
 
-  // Load lists (lowercase, one per line)
+  // -------- Fallback wordlists (used only if data/*.txt not found) --------
+  // Adjectives + a few -ly adverbs for variety; lengths 3..12 emphasized
+  const FALLBACK_ADJ = [
+    "big","odd","raw","icy","apt","fit","sad","mad","new","old","red","tan","shy","sly","dim",
+    "fair","calm","cool","warm","neat","true","mere","pure","lush","kind","tidy","brisk","sharp",
+    "brave","quick","quiet","proud","happy","sunny","rainy","spicy","crisp","clear","smart","eager",
+    "bright","gentle","mighty","little","narrow","humble","smooth","sparkly","steady","cheery",
+    "curious","playful","patient","fearless","dynamic","vivid","sturdy","cheerful","friendly",
+    "graceful","powerful","stubborn","colorful","thoughtful","brilliant","efficient","confident",
+    "adventurous","courageous","harmonious","meticulous","generous","glorious","victorious",
+    "swift","bold","sleek","sober","solid","spry","stern","spruce","sporty","saintly","sage",
+    "noble","nimble","gentle","silent","clever","bright","rustic","modern","classic","urban",
+    "rural","shiny","shadowy","stormy","breezy","foggy","dusty","golden","silver","crimson",
+    "amber","scarlet","amber","ivory","onyx","teal","violet","verdant","willful","witty","zesty",
+    "lively","jolly","merry","jazzy","snappy","snug","cozy","roomy","airy","roomy","tasty",
+    "savory","buttery","silky","soapy","leafy","woody","gritty","snowy","rainy","windy","blurry",
+    "boldly","quickly","slowly","softly","brightly","bravely","surely","plain","prime","grand",
+    "elegant","fancy","rapid","stern","eager","steady","wild","wise","worthy","zany","gentle",
+    "frozen","fiery","stormy","sunlit","starry","dusky","murky","moody","peppy","perky","plucky"
+  ];
+
+  // Nouns; lengths 3..12 emphasized and mix of nature/objects/roles
+  const FALLBACK_NOUN = [
+    "cat","dog","fox","owl","ant","bee","ray","sun","sky","sea","gem","orb","map","key","cup",
+    "wolf","bear","deer","hawk","kite","star","moon","lake","tree","ship","rock","rose","book","coin",
+    "tiger","eagle","otter","panda","river","cloud","apple","stone","flame","shark","storm","plane",
+    "falcon","canyon","forest","planet","meadow","rocket","anchor","beacon","castle","harbor","bridge",
+    "phoenix","thunder","voyager","citadel","compass","scholar","whisper","lantern","orchard","compass",
+    "mountain","guardian","engineer","sentinel","silvermoon","sapphire","avalanche","citizen","harvest",
+    "ranger","sailor","runner","artist","pioneer","captain","pilot","guardian","tunnel","harvest",
+    "meadow","cavern","desert","island","valley","village","market","station","harvest","beaconry",
+    "summit","prairie","cypress","willow","maple","lotus","thicket","granite","marble","crystal",
+    "gadget","camera","tablet","server","socket","module","widget","engine","switch","router","sensor",
+    "harpoon","battery","compass","journal","portal","signal","festival","planet","citadel","harborer"
+  ];
+
+  // -------- Load lists (prefer external data/*.txt, else fallback) --------
   const loadList = async (path) => {
     try {
       const res = await fetch(path, { cache: "no-store" });
       if (!res.ok) throw new Error(path + " not found");
       const text = await res.text();
       return new Set(text.split(/\r?\n/).map(s => s.trim().toLowerCase()).filter(Boolean));
-    } catch (e) {
-      console.warn("List load skipped:", e.message);
-      return new Set();
+    } catch {
+      return new Set(); // fail silently; we'll use fallback
     }
   };
 
@@ -110,7 +149,10 @@
   let ADJ = await loadList("./data/adjectives.txt");
   let NOUN = await loadList("./data/nouns.txt");
 
-  // Secure RNG helpers
+  if (ADJ.size === 0) ADJ = new Set(FALLBACK_ADJ);
+  if (NOUN.size === 0) NOUN = new Set(FALLBACK_NOUN);
+
+  // -------- Helpers --------
   function randomInt(max) {
     if (max <= 0) return 0;
     const u32 = new Uint32Array(1);
@@ -119,9 +161,7 @@
     do { crypto.getRandomValues(u32); r = u32[0]; } while (r >= limit);
     return r % max;
   }
-  function pickFromArray(arr) { return arr[randomInt(arr.length)]; }
 
-  // Build charset for random mode
   function getCharset(opts) {
     let cs = "";
     if (opts.lower)  cs += sets.lower;
@@ -132,7 +172,6 @@
     return cs;
   }
 
-  // Random mode generator (ensures at least one from each selected set)
   function generateRandom(len, cs, mustSets) {
     if (cs.length < 4) throw new Error("Choose at least one character set.");
     const picks = [];
@@ -145,7 +184,6 @@
     return picks.join("");
   }
 
-  // De-leet + normalization for inappropriate checks
   const deLeetMap = {'0':'o','1':'i','!':'i','3':'e','4':'a','@':'a','5':'s','$':'s','7':'t','8':'b','9':'g'};
   function normalizeForCheck(pw) {
     const lower = pw.toLowerCase();
@@ -170,33 +208,61 @@
     return false;
   }
 
-  // Pattern mode: Adj/Adv + Noun + 2 digits + 1 symbol
   function toTitle(s) { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 
-  function pickCleanWord(fromSet) {
-    const arr = Array.from(fromSet);
-    const MAX_TRIES = 500;
-    for (let i = 0; i < MAX_TRIES; i++) {
-      const w = arr[randomInt(arr.length)];
-      if (!BAD.has(w)) return w;
+  function buildLengthIndex(wordSet, bannedSet) {
+    const idx = new Map();
+    for (const w of wordSet) {
+      if (bannedSet && bannedSet.has(w)) continue;
+      const L = w.length;
+      if (!idx.has(L)) idx.set(L, []);
+      idx.get(L).push(w);
     }
-    throw new Error("Could not pick a clean word; check your word lists.");
+    return idx;
   }
 
+  let ADJ_BY_LEN = buildLengthIndex(ADJ, BAD);
+  let NOUN_BY_LEN = buildLengthIndex(NOUN, BAD);
+
   function generatePattern(opts) {
-    if (!ADJ.size || !NOUN.size)
-      throw new Error("Word lists missing: add data/adjectives.txt and data/nouns.txt");
-    const adj = pickCleanWord(ADJ);
-    const noun = pickCleanWord(NOUN);
-    const wordPart = (opts.camelCase ? (toTitle(adj) + toTitle(noun)) : (adj + noun));
+    // exact fit: (adj/adverb length + noun length) == (len - 3)
+    const target = opts.len - 3; // 2 digits + 1 symbol
+    if (target <= 1) throw new Error("Length too small. Increase length.");
+
+    const pairs = [];
+    for (const [aLen, aWords] of ADJ_BY_LEN.entries()) {
+      const nLen = target - aLen;
+      const nWords = NOUN_BY_LEN.get(nLen);
+      if (nLen > 0 && nWords && nWords.length && aWords.length) {
+        pairs.push([aLen, nLen]);
+      }
+    }
+    if (!pairs.length) {
+      const minAdj = Math.min(...[...ADJ_BY_LEN.keys()]);
+      const minNoun = Math.min(...[...NOUN_BY_LEN.keys()]);
+      const minPossible = 3 + minAdj + minNoun;
+      throw new Error(
+        `No adjective+noun combo matches length ${opts.len}. ` +
+        `Try a different length or expand lists. (Minimum feasible around ${minPossible}.)`
+      );
+    }
+
+    const [aPick, nPick] = pairs[randomInt(pairs.length)];
+    const adjArr = ADJ_BY_LEN.get(aPick);
+    const nounArr = NOUN_BY_LEN.get(nPick);
+    const adj = adjArr[randomInt(adjArr.length)];
+    const noun = nounArr[randomInt(nounArr.length)];
+    const wordPart = opts.camelCase ? (toTitle(adj) + toTitle(noun)) : (adj + noun);
+
+    // 2 digits + 1 symbol
     const num = String(randomInt(100)).padStart(2, "0");
     let symbols = sets.symbols;
     if (opts.noAmbig) symbols = symbols.replace(ambig, "");
     const sym = symbols.charAt(randomInt(symbols.length));
-    return wordPart + num + sym;
+
+    return wordPart + num + sym; // exact length == opts.len
   }
 
-  // Try-making with filter, shared for both modes
   async function makePassword(opts) {
     const MAX_TRIES = 200;
 
@@ -205,7 +271,7 @@
         const cand = generatePattern(opts);
         if (!opts.avoidWords || !isInappropriate(cand, true)) return cand;
       }
-      throw new Error("Could not generate a clean pattern password. Consider expanding word lists or disabling 'avoid words'.");
+      throw new Error("Could not generate a clean pattern password. Expand lists or disable 'avoid words'.");
     } else {
       const mustSets = [], allSets = [];
       if (opts.lower)  { mustSets.push(sets.lower);  allSets.push(sets.lower); }
@@ -236,7 +302,7 @@
   $("gen").onclick = async () => {
     const opts = {
       mode: modePattern.checked ? "pattern" : "random",
-      len: Math.max(8, Math.min(64, parseInt(($("len")?.value) || "20", 10))),
+      len: Math.max(6, Math.min(64, parseInt(($("len")?.value) || "16", 10))),
       lower: $("lower")?.checked,
       upper: $("upper")?.checked,
       digits: $("digits")?.checked,
